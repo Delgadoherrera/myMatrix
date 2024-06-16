@@ -126,53 +126,67 @@ def update_plot():
         ax.set_title(f"{current_symbol} Price")
         ax.set_xlabel("Time")
         ax.set_ylabel("Price (USD)")
+        plt.tight_layout()
         canvas.draw()
 
 root = tk.Tk()
 root.title("Crypto Price Viewer")
 
-left_frame = tk.Frame(root)
-left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+# Maximiza la ventana al abrir
+root.update_idletasks()
+screen_width = root.winfo_screenwidth()
+screen_height = root.winfo_screenheight()
+root.geometry(f"{screen_width}x{screen_height}+0+0")
 
-search_frame = tk.Frame(left_frame)
-search_frame.pack(fill=tk.X, padx=5, pady=5)
+# Crear un PanedWindow para dividir la pantalla
+paned_window = tk.PanedWindow(root, orient=tk.VERTICAL)
+paned_window.pack(fill=tk.BOTH, expand=True)
+
+# Frame superior (para el gráfico)
+top_frame = tk.Frame(paned_window)
+paned_window.add(top_frame)
+
+# Frame inferior (para otros comandos y botones)
+bottom_frame = tk.Frame(paned_window)
+paned_window.add(bottom_frame)
+
+# Configurar el gráfico en el frame superior
+fig_width = 10
+fig_height = 5
+
+fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+canvas = FigureCanvasTkAgg(fig, master=top_frame)
+canvas.draw()
+canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+# Añadir widgets al frame inferior
+control_frame = tk.Frame(bottom_frame)
+control_frame.pack(fill=tk.BOTH, expand=True)
+
+lbl_price = ttk.Label(control_frame, text="Seleccione una criptomoneda", font=("Helvetica", 16))
+lbl_price.pack(pady=10)
+
+interval_var = tk.StringVar()
+interval_combo = ttk.Combobox(control_frame, textvariable=interval_var, values=['1s', '1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M'])
+interval_combo.current(0)  # Selecciona '1m' por defecto
+interval_combo.pack(pady=5)
+interval_combo.bind('<<ComboboxSelected>>', on_interval_change)
 
 search_var = tk.StringVar()
 search_var.trace("w", update_list)
 
-search_entry = ttk.Entry(search_frame, textvariable=search_var)
+search_entry = ttk.Entry(control_frame, textvariable=search_var)
 search_entry.pack(fill=tk.X, padx=5, pady=5)
 
-lb = tk.Listbox(left_frame, height=15)
-lb.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+lb = tk.Listbox(control_frame, height=6)
+lb.pack(fill=tk.BOTH, expand=True)
 lb.bind('<<ListboxSelect>>', on_select)
 
-scrollbar = tk.Scrollbar(left_frame, orient="vertical")
+scrollbar = tk.Scrollbar(control_frame, orient="vertical")
 scrollbar.config(command=lb.yview)
 scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
 lb.config(yscrollcommand=scrollbar.set)
-
-right_frame = tk.Frame(root)
-right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
-
-lbl_price = ttk.Label(right_frame, text="Seleccione una criptomoneda", font=("Helvetica", 16))
-lbl_price.pack(pady=20)
-
-# Tamaño de la figura del gráfico
-fig_width = 5
-fig_height = 4
-
-fig, ax = plt.subplots(figsize=(fig_width, fig_height))
-canvas = FigureCanvasTkAgg(fig, master=right_frame)
-canvas.draw()  # Añadir esta línea para inicializar el lienzo
-canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-
-interval_var = tk.StringVar()
-interval_combo = ttk.Combobox(right_frame, textvariable=interval_var, values=['1s','1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M'])
-interval_combo.current(0)  # Selecciona '1m' por defecto
-interval_combo.pack(pady=10)
-interval_combo.bind('<<ComboboxSelected>>', on_interval_change)
 
 load_crypto_list()
 

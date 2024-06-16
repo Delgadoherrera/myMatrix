@@ -4,21 +4,30 @@ from tkinter import ttk
 import threading
 import websocket
 import json
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from datetime import datetime
+import pandas as pd
 
 # Variable global para almacenar el símbolo de la criptomoneda seleccionada
 current_symbol = None
 ws = None  # WebSocket global para gestionar la conexión
+price_data = pd.DataFrame(columns=["time", "price"])  # DataFrame para almacenar datos de precios
 
 # Función para manejar mensajes de WebSocket
 def on_message(ws, message):
+    global price_data
     try:
         data = json.loads(message)
-        # Verifica si el mensaje es una lista y busca el símbolo actual
         if isinstance(data, list):
             for item in data:
                 if item['s'] == current_symbol:
-                    price = item['c']
+                    price = float(item['c'])
+                    time = datetime.now()
+                    new_data = pd.DataFrame([[time, price]], columns=["time", "price"])
+                    price_data = pd.concat([price_data, new_data]).tail(500)
                     lbl_price.config(text=f"{current_symbol}: {price} USD")
+                    update_plot()
                     break
     except Exception as e:
         print(f"Error al procesar el mensaje: {e}")
@@ -87,6 +96,18 @@ def run_websocket():
     )
     ws.run_forever()
 
+# Función para actualizar el gráfico
+def update_plot():
+    if not price_data.empty:
+        ax.clear()
+        ax.plot(price_data["time"], price_data["price"], label=current_symbol)
+        ax.set_title(f"{current_symbol} Price")
+        ax.set_xlabel("Time")
+        ax.set_ylabel("Price (USD)")
+        ax.legend()
+        ax.grid(True)
+        canvas.draw()
+
 # Configuración de la interfaz gráfica
 root = tk.Tk()
 root.title("Crypto Price Viewer")
@@ -119,13 +140,18 @@ scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
 lb.config(yscrollcommand=scrollbar.set)
 
-# Crear el marco derecho para mostrar el precio
+# Crear el marco derecho para mostrar el precio y el gráfico
 right_frame = tk.Frame(root)
 right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
 # Etiqueta para mostrar el precio de la criptomoneda seleccionada
 lbl_price = ttk.Label(right_frame, text="Seleccione una criptomoneda", font=("Helvetica", 16))
 lbl_price.pack(pady=20)
+
+# Crear la figura y el eje para el gráfico
+fig, ax = plt.subplots()
+canvas = FigureCanvasTkAgg(fig, master=right_frame)
+canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
 # Cargar la lista de criptomonedas
 load_crypto_list()

@@ -11,10 +11,11 @@ import numpy as np
 import requests
 import pandas_ta as ta
 from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense
+from tensorflow.keras.models import Sequential, Model
+from tensorflow.keras.layers import LSTM, Dense, Input
 import mplfinance as mpf
 import time
+import pyperclip
 
 # Función para inicializar la ventana principal y los indicadores técnicos seleccionados
 def initialize_window():
@@ -34,7 +35,7 @@ def initialize_window():
         'atr': tk.BooleanVar(value=True)
     }
 
-# Variables globales (deben estar fuera de las funciones)
+# Variables globales
 current_symbol = None
 current_interval = '1m'
 ws = None
@@ -111,28 +112,37 @@ def prepare_data_with_indicators(df, window_size):
 
     scaled_data = input_scaler.fit_transform(df[features])
 
-    labels = np.zeros((len(df), 3))
+    labels = np.zeros((len(df), 4))
     labels[:, 0] = df['close']
-    labels[:, 1] = df['close'] * 1.02
-    labels[:, 2] = df['close'] * 0.98
+    labels[:, 1] = df['close'] * 1.02  # Take Profit para Long
+    labels[:, 2] = df['close'] * 0.98  # Stop Loss para Long
+    labels[:, 3] = np.where(df['close'].shift(-1) > df['close'], 1, 0)  # 1 si se espera que suba, 0 si se espera que baje
 
-    scaled_labels = output_scaler.fit_transform(labels)
+    scaled_labels = output_scaler.fit_transform(labels[:, :3])
 
-    data, y = [], []
+    data, y, direction = [], [], []
     for i in range(len(scaled_data) - window_size):
         data.append(scaled_data[i:i + window_size])
         y.append(scaled_labels[i + window_size])
-    return np.array(data), np.array(y), input_scaler, output_scaler
+        direction.append(labels[i + window_size, 3])
+    return np.array(data), np.array(y), np.array(direction), input_scaler, output_scaler
 
 # Función para entrenar el modelo
-def train_model_with_indicators(X, y):
-    model = Sequential()
-    model.add(LSTM(50, return_sequences=True, input_shape=(X.shape[1], X.shape[2])))
-    model.add(LSTM(50))
-    model.add(Dense(3))  # Tres salidas: entrada, take profit, stop loss
+def train_model_with_indicators(X, y, direction):
+    inputs = Input(shape=(X.shape[1], X.shape[2]))
+    x = LSTM(50, return_sequences=True)(inputs)
+    x = LSTM(50)(x)
+
+    # Predicción de precios (entrada, TP, SL)
+    price_output = Dense(3)(x)
+
+    # Predicción de la dirección (subida o bajada)
+    direction_output = Dense(1, activation='sigmoid')(x)
+
+    model = Model(inputs=inputs, outputs=[price_output, direction_output])
     
-    model.compile(optimizer='adam', loss='mean_squared_error')
-    model.fit(X, y, epochs=10, batch_size=32)
+    model.compile(optimizer='adam', loss=['mean_squared_error', 'binary_crossentropy'], loss_weights=[1.0, 0.5])
+    model.fit(X, [y, direction], epochs=10, batch_size=32)
     return model
 
 # Función para formatear los precios
@@ -162,10 +172,11 @@ def suggest_trading_position(model, input_scaler, output_scaler, price_data, sym
 
         latest_data = input_scaler.transform(price_data.tail(60)[features])
         latest_data = np.expand_dims(latest_data, axis=0)
-        prediction = model.predict(latest_data)
+        price_prediction, direction_prediction = model.predict(latest_data)
 
-        entry_price, take_profit, stop_loss = output_scaler.inverse_transform(prediction)[0]
-        
+        entry_price, take_profit, stop_loss = output_scaler.inverse_transform(price_prediction)[0]
+        direction = direction_prediction[0][0]
+
         current_price = price_data['close'].iloc[-1]
 
         # Validar precios
@@ -176,22 +187,59 @@ def suggest_trading_position(model, input_scaler, output_scaler, price_data, sym
         if np.isnan(stop_loss) or stop_loss <= 0:
             stop_loss = "No disponible"
 
-        # Evitar recomendar entrada significativamente más alta que el precio actual
-        if entry_price != "No disponible" and entry_price > current_price * 1.01:
-            entry_price = current_price  # Ajustar entrada al precio actual si es significativamente más alta
+        # Determinar la dirección y ajustar TP/SL en consecuencia
+        if direction >= 0.5:
+            position_type = "Long"
+            take_profit = format_price(symbol, take_profit)
+            stop_loss = format_price(symbol, stop_loss)
+        else:
+            position_type = "Short"
+            take_profit = format_price(symbol, current_price - (entry_price - current_price))
+            stop_loss = format_price(symbol, current_price + (current_price - entry_price))
+            entry_price = format_price(symbol, entry_price)
 
         return {
+            'position_type': position_type,
             'entry_price': format_price(symbol, entry_price) if entry_price != "No disponible" else "No disponible",
-            'take_profit': format_price(symbol, take_profit) if take_profit != "No disponible" else "No disponible",
-            'stop_loss': format_price(symbol, stop_loss) if stop_loss != "No disponible" else "No disponible"
+            'take_profit': take_profit,
+            'stop_loss': stop_loss
         }
     except Exception as e:
         print(f"Error al sugerir posición de trading: {e}")
         return {
+            'position_type': "N/A",
             'entry_price': "No disponible",
             'take_profit': "No disponible",
             'stop_loss': "No disponible"
         }
+
+# Función para mostrar la recomendación de posición de trading
+def show_trading_position(suggestion):
+    position_window = tk.Toplevel(root)
+    position_window.title("Recomendación de Trading")
+    position_window.geometry("400x250")
+
+    def copy_to_clipboard(text):
+        root.clipboard_clear()  # Limpia el contenido del portapapeles
+        root.clipboard_append(text)  # Añade el texto al portapapeles
+        root.update()  # Actualiza el portapapeles para asegurarse de que el contenido esté disponible
+        tk.messagebox.showinfo("Copiar", "Copiado al portapapeles")
+
+    ttk.Label(position_window, text="Recomendación de Trading", font=("Helvetica", 16)).pack(pady=10)
+    ttk.Label(position_window, text=f"Tipo de Posición: {suggestion['position_type']}", font=("Helvetica", 14)).pack(pady=5)
+    
+    entry_label = ttk.Label(position_window, text=f"Entrada: {suggestion['entry_price']}", font=("Helvetica", 14))
+    entry_label.pack(pady=5)
+    ttk.Button(position_window, text="Copiar Entrada", command=lambda: copy_to_clipboard(suggestion['entry_price'])).pack(pady=5)
+
+    tp_label = ttk.Label(position_window, text=f"Take Profit: {suggestion['take_profit']}", font=("Helvetica", 14))
+    tp_label.pack(pady=5)
+    ttk.Button(position_window, text="Copiar Take Profit", command=lambda: copy_to_clipboard(suggestion['take_profit'])).pack(pady=5)
+
+    sl_label = ttk.Label(position_window, text=f"Stop Loss: {suggestion['stop_loss']}", font=("Helvetica", 14))
+    sl_label.pack(pady=5)
+    ttk.Button(position_window, text="Copiar Stop Loss", command=lambda: copy_to_clipboard(suggestion['stop_loss'])).pack(pady=5)
+
 
 # Función para manejar mensajes del WebSocket
 def on_message(ws, message):
@@ -288,8 +336,8 @@ def update_data_and_model_thread():
         limit = 2000  # Aumenta para intervalos más largos
     price_data = fetch_binance_historical_data(current_symbol, current_interval, limit=limit)
     price_data = add_technical_indicators(price_data)
-    X, y, input_scaler, output_scaler = prepare_data_with_indicators(price_data, window_size=60)
-    model = train_model_with_indicators(X, y)
+    X, y, direction, input_scaler, output_scaler = prepare_data_with_indicators(price_data, window_size=60)
+    model = train_model_with_indicators(X, y, direction)
     subscribe_to_symbol(current_symbol, current_interval)
     close_progress_window()
 
@@ -340,7 +388,7 @@ def format_price(symbol, price):
 # Función para sugerir una posición de trading
 def on_suggest():
     suggestion = suggest_trading_position(model, input_scaler, output_scaler, price_data, current_symbol)
-    lbl_suggestion.config(text=f"Entrada: {suggestion['entry_price']}, TP: {suggestion['take_profit']}, SL: {suggestion['stop_loss']}")
+    show_trading_position(suggestion)
 
 # Crear la ventana de configuración de indicadores
 def open_settings_window():
@@ -409,9 +457,6 @@ lb.config(yscrollcommand=scrollbar.set)
 
 btn_suggest = ttk.Button(control_frame, text="Hack Position", command=on_suggest)
 btn_suggest.pack(pady=5)
-
-lbl_suggestion = ttk.Label(control_frame, text="", font=("Helvetica", 16))
-lbl_suggestion.pack(pady=10)
 
 btn_settings = ttk.Button(control_frame, text="Configuración de Indicadores", command=open_settings_window)
 btn_settings.pack(pady=5)

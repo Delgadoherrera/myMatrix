@@ -16,6 +16,23 @@ current_interval = '1m'
 ws = None
 price_data = pd.DataFrame(columns=["time", "open", "high", "low", "close"])
 
+# Inicializar el modelo de IA
+class SimpleAIModule:
+    def __init__(self):
+        self.previous_price = None
+
+    def decide_action(self, current_price):
+        if self.previous_price is None:
+            self.previous_price = current_price
+            return "Hold"
+
+        # Regla simple: compra si el precio sube, vende si baja
+        action = "Buy" if current_price > self.previous_price else "Sell"
+        self.previous_price = current_price
+        return action
+
+ai_module = SimpleAIModule()
+
 def on_message(ws, message):
     global price_data
     try:
@@ -31,6 +48,9 @@ def on_message(ws, message):
                 new_data = pd.DataFrame([[time, open_price, high_price, low_price, close_price]], columns=["time", "open", "high", "low", "close"])
                 price_data = pd.concat([price_data, new_data]).drop_duplicates(subset=['time']).tail(500)
                 update_plot()
+                # Decisión de la IA
+                action = ai_module.decide_action(close_price)
+                ai_decision_label.config(text=f"AI Decision: {action}")
     except Exception as e:
         print(f"Error al procesar el mensaje: {e}")
 
@@ -187,6 +207,10 @@ scrollbar.config(command=lb.yview)
 scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
 lb.config(yscrollcommand=scrollbar.set)
+
+# Label para mostrar la decisión de la IA
+ai_decision_label = ttk.Label(control_frame, text="AI Decision: Hold", font=("Helvetica", 14))
+ai_decision_label.pack(pady=5)
 
 load_crypto_list()
 

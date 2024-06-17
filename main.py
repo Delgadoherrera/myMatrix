@@ -31,6 +31,7 @@ def on_message(ws, message):
                 new_data = pd.DataFrame([[time, open_price, high_price, low_price, close_price]], columns=["time", "open", "high", "low", "close"])
                 price_data = pd.concat([price_data, new_data]).drop_duplicates(subset=['time']).tail(500)
                 update_plot()
+                analyze_data()  # Asegúrate de llamar a esta función después de actualizar los datos
     except Exception as e:
         print(f"Error al procesar el mensaje: {e}")
 
@@ -84,6 +85,7 @@ def on_select(event):
         price_data = fetch_historical_data(current_symbol, current_interval)
         subscribe_to_symbol(current_symbol, current_interval)
         lbl_price.config(text=f"Datos históricos cargados para {current_symbol}")
+        analyze_data()  # Asegúrate de llamar a esta función después de cambiar el símbolo
 
 def on_interval_change(event):
     global current_interval, price_data
@@ -93,6 +95,7 @@ def on_interval_change(event):
         current_interval = new_interval
         price_data = fetch_historical_data(current_symbol, current_interval)
         subscribe_to_symbol(current_symbol, current_interval)
+        analyze_data()  # Asegúrate de llamar a esta función después de cambiar el intervalo
 
 def update_list(*args):
     search_term = search_var.get().upper()
@@ -128,6 +131,23 @@ def update_plot():
         ax.set_ylabel("Price (USD)")
         plt.tight_layout()
         canvas.draw()
+
+def analyze_data():
+    if not price_data.empty and len(price_data) > 20:  # Asegúrate de tener suficientes datos para calcular la SMA
+        sma_period = 20  # Puedes ajustar este valor para cambiar la sensibilidad de la SMA
+        price_data['SMA'] = price_data['close'].rolling(window=sma_period).mean()
+        latest_price = price_data['close'].iloc[-1]
+        latest_sma = price_data['SMA'].iloc[-1]
+        
+        if pd.notna(latest_sma):  # Verifica que la SMA se haya calculado correctamente
+            if latest_price > latest_sma:
+                signal_label.config(text="Vender", foreground="red")
+            else:
+                signal_label.config(text="Comprar", foreground="green")
+        else:
+            signal_label.config(text="Esperando señal", foreground="black")
+    else:
+        signal_label.config(text="Esperando señal", foreground="black")
 
 root = tk.Tk()
 root.title("Crypto Price Viewer")
@@ -187,6 +207,10 @@ scrollbar.config(command=lb.yview)
 scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
 lb.config(yscrollcommand=scrollbar.set)
+
+# Añadir el widget para mostrar la señal de compra/venta
+signal_label = ttk.Label(control_frame, text="Esperando señal", font=("Helvetica", 16))
+signal_label.pack(pady=20)
 
 load_crypto_list()
 

@@ -150,6 +150,30 @@ def update_plot():
         plt.tight_layout()
         canvas.draw()
 
+def show_report():
+    if current_symbol:
+        # Mostrar un simple reporte con precios máximo y mínimo
+        max_price = price_data['high'].max()
+        min_price = price_data['low'].min()
+        avg_price = price_data['close'].mean()
+        report_text = (f"Reporte para {current_symbol}:\n"
+                       f"Precio Máximo: {max_price:.2f}\n"
+                       f"Precio Mínimo: {min_price:.2f}\n"
+                       f"Precio Promedio: {avg_price:.2f}\n")
+        report_label.config(text=report_text)
+
+def analyze_and_suggest():
+    if current_symbol and not price_data.empty:
+        # Sencillo análisis y sugerencia de stop loss y take profit
+        avg_price = price_data['close'].mean()
+        stop_loss = avg_price * 0.95  # Ejemplo: 5% debajo del promedio
+        take_profit = avg_price * 1.10  # Ejemplo: 10% por encima del promedio
+        suggestion = (f"Sugerencia de operación para {current_symbol}:\n"
+                      f"Precio Promedio: {avg_price:.2f}\n"
+                      f"Stop Loss: {stop_loss:.2f}\n"
+                      f"Take Profit: {take_profit:.2f}\n")
+        suggestion_label.config(text=suggestion)
+
 root = tk.Tk()
 root.title("Crypto Price Viewer")
 
@@ -212,6 +236,19 @@ lb.config(yscrollcommand=scrollbar.set)
 load_crypto_list()
 
 get_symbol_decimals()
+
+# Añadir botones de "Mostrar Reportes" e "Iniciar Captura"
+btn_report = ttk.Button(control_frame, text="Mostrar Reportes", command=show_report)
+btn_report.pack(pady=5)
+
+btn_analyze = ttk.Button(control_frame, text="Iniciar Captura", command=analyze_and_suggest)
+btn_analyze.pack(pady=5)
+
+report_label = ttk.Label(control_frame, text="", font=("Helvetica", 12))
+report_label.pack(pady=5)
+
+suggestion_label = ttk.Label(control_frame, text="", font=("Helvetica", 12))
+suggestion_label.pack(pady=5)
 
 threading.Thread(target=run_websocket, daemon=True).start()
 

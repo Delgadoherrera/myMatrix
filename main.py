@@ -1,3 +1,4 @@
+# Agrega las importaciones necesarias y define las funciones
 import tkinter as tk
 from tkinter import ttk
 import threading
@@ -8,6 +9,10 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from datetime import datetime
 import pandas as pd
 import requests
+import numpy as np
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense
+from sklearn.preprocessing import MinMaxScaler
 import mplfinance as mpf
 
 # Variables globales
@@ -16,9 +21,10 @@ current_interval = '1m'
 ws = None
 price_data = pd.DataFrame(columns=["time", "open", "high", "low", "close"])
 crypto_decimals = {}
+model = None
+scaler = None
 
 def get_symbol_decimals():
-    """Obtiene la cantidad de decimales para cada símbolo."""
     global crypto_decimals
     url = 'https://api.binance.com/api/v3/exchangeInfo'
     response = requests.get(url)
@@ -32,7 +38,6 @@ def get_symbol_decimals():
             crypto_decimals[symbol] = len(decimals)
 
 def format_price(symbol, price):
-    """Formatea el precio de acuerdo a los decimales del símbolo."""
     decimals = crypto_decimals.get(symbol, 2)
     return f"{price:.{decimals}f}"
 
@@ -94,8 +99,32 @@ def fetch_historical_data(symbol, interval):
     historical_data["close"] = historical_data["close"].astype(float)
     return historical_data[["time", "open", "high", "low", "close"]]
 
+def prepare_data(df, window_size):
+    data = []
+    labels = []
+    for i in range(len(df) - window_size):
+        data.append(df.iloc[i:i + window_size].values)
+        labels.append(df.iloc[i + window_size].values)
+    return np.array(data), np.array(labels)
+
+def train_model(data):
+    global model, scaler
+    scaler = MinMaxScaler(feature_range=(0, 1))
+    scaled_data = scaler.fit_transform(data)
+    
+    window_size = 60
+    X, y = prepare_data(pd.DataFrame(scaled_data), window_size)
+    
+    model = Sequential()
+    model.add(LSTM(50, return_sequences=True, input_shape=(window_size, data.shape[1])))
+    model.add(LSTM(50))
+    model.add(Dense(data.shape[1]))
+    
+    model.compile(optimizer='adam', loss='mean_squared_error')
+    model.fit(X, y, epochs=10, batch_size=32)
+
 def on_select(event):
-    global current_symbol, price_data
+    global current_symbol, price_data, model, scaler
     selection = lb.curselection()
     if selection:
         new_symbol = lb.get(selection)
@@ -105,15 +134,21 @@ def on_select(event):
         price_data = fetch_historical_data(current_symbol, current_interval)
         subscribe_to_symbol(current_symbol, current_interval)
         lbl_price.config(text=f"Datos históricos cargados para {current_symbol}")
+        
+        # Entrena el modelo con los nuevos datos
+        train_model(price_data[["open", "high", "low", "close"]].values)
 
 def on_interval_change(event):
-    global current_interval, price_data
+    global current_interval, price_data, model, scaler
     new_interval = interval_var.get()
     if current_symbol and new_interval != current_interval:
         unsubscribe_from_symbol(current_symbol, current_interval)
         current_interval = new_interval
         price_data = fetch_historical_data(current_symbol, current_interval)
         subscribe_to_symbol(current_symbol, current_interval)
+        
+        # Entrena el modelo con los nuevos datos
+        train_model(price_data[["open", "high", "low", "close"]].values)
 
 def update_list(*args):
     search_term = search_var.get().upper()
@@ -150,52 +185,45 @@ def update_plot():
         plt.tight_layout()
         canvas.draw()
 
-def show_report():
-    if current_symbol:
-        # Mostrar un simple reporte con precios máximo y mínimo
-        max_price = price_data['high'].max()
-        min_price = price_data['low'].min()
-        avg_price = price_data['close'].mean()
-        report_text = (f"Reporte para {current_symbol}:\n"
-                       f"Precio Máximo: {max_price:.2f}\n"
-                       f"Precio Mínimo: {min_price:.2f}\n"
-                       f"Precio Promedio: {avg_price:.2f}\n")
-        report_label.config(text=report_text)
+def suggest_position():
+    global model, scaler, price_data
+    
+    if len(price_data) < 60:
+        return "Insufficient data for prediction"
+    
+    latest_data = scaler.transform(price_data.tail(60)[["open", "high", "low", "close"]])
+    latest_data = np.expand_dims(latest_data, axis=0)
+    
+    prediction = model.predict(latest_data)
+    suggestion = scaler.inverse_transform(prediction)[0]
+    
+    entry_price = suggestion[3]
+    take_profit = entry_price * 1.02
+    stop_loss = entry_price * 0.98
+    
+    return f"Entrada: {format_price(current_symbol, entry_price)}, TP: {format_price(current_symbol, take_profit)}, SL: {format_price(current_symbol, stop_loss)}"
 
-def analyze_and_suggest():
-    if current_symbol and not price_data.empty:
-        # Sencillo análisis y sugerencia de stop loss y take profit
-        avg_price = price_data['close'].mean()
-        stop_loss = avg_price * 0.95  # Ejemplo: 5% debajo del promedio
-        take_profit = avg_price * 1.10  # Ejemplo: 10% por encima del promedio
-        suggestion = (f"Sugerencia de operación para {current_symbol}:\n"
-                      f"Precio Promedio: {avg_price:.2f}\n"
-                      f"Stop Loss: {stop_loss:.2f}\n"
-                      f"Take Profit: {take_profit:.2f}\n")
-        suggestion_label.config(text=suggestion)
+def on_suggest():
+    suggestion = suggest_position()
+    lbl_suggestion.config(text=suggestion)
 
 root = tk.Tk()
 root.title("Crypto Price Viewer")
 
-# Maximiza la ventana al abrir
 root.update_idletasks()
 screen_width = root.winfo_screenwidth()
 screen_height = root.winfo_screenheight()
 root.geometry(f"{screen_width}x{screen_height}+0+0")
 
-# Crear un PanedWindow para dividir la pantalla
 paned_window = tk.PanedWindow(root, orient=tk.VERTICAL)
 paned_window.pack(fill=tk.BOTH, expand=True)
 
-# Frame superior (para el gráfico)
 top_frame = tk.Frame(paned_window)
 paned_window.add(top_frame)
 
-# Frame inferior (para otros comandos y botones)
 bottom_frame = tk.Frame(paned_window)
 paned_window.add(bottom_frame)
 
-# Configurar el gráfico en el frame superior
 fig_width = 10
 fig_height = 5
 
@@ -204,7 +232,6 @@ canvas = FigureCanvasTkAgg(fig, master=top_frame)
 canvas.draw()
 canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
-# Añadir widgets al frame inferior
 control_frame = tk.Frame(bottom_frame)
 control_frame.pack(fill=tk.BOTH, expand=True)
 
@@ -213,7 +240,7 @@ lbl_price.pack(pady=10)
 
 interval_var = tk.StringVar()
 interval_combo = ttk.Combobox(control_frame, textvariable=interval_var, values=['1s', '1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M'])
-interval_combo.current(0)  # Selecciona '1m' por defecto
+interval_combo.current(1)  # Selecciona '1m' por defecto
 interval_combo.pack(pady=5)
 interval_combo.bind('<<ComboboxSelected>>', on_interval_change)
 
@@ -233,22 +260,14 @@ scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
 lb.config(yscrollcommand=scrollbar.set)
 
+btn_suggest = ttk.Button(control_frame, text="Hack Position", command=on_suggest)
+btn_suggest.pack(pady=5)
+
+lbl_suggestion = ttk.Label(control_frame, text="", font=("Helvetica", 16))
+lbl_suggestion.pack(pady=10)
+
 load_crypto_list()
-
 get_symbol_decimals()
-
-# Añadir botones de "Mostrar Reportes" e "Iniciar Captura"
-btn_report = ttk.Button(control_frame, text="Mostrar Reportes", command=show_report)
-btn_report.pack(pady=5)
-
-btn_analyze = ttk.Button(control_frame, text="Iniciar Captura", command=analyze_and_suggest)
-btn_analyze.pack(pady=5)
-
-report_label = ttk.Label(control_frame, text="", font=("Helvetica", 12))
-report_label.pack(pady=5)
-
-suggestion_label = ttk.Label(control_frame, text="", font=("Helvetica", 12))
-suggestion_label.pack(pady=5)
 
 threading.Thread(target=run_websocket, daemon=True).start()
 
